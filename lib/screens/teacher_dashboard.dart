@@ -324,17 +324,15 @@ class _StatsTabState extends State<StatsTab> {
   Future<void> loadStats() async {
     setState(() => loading = true);
 
+    // 1️⃣ Get sessions for subject
     final sessionsSnap = await FirebaseFirestore.instance
         .collection('sessions')
         .where('subject', isEqualTo: widget.subject)
         .get();
 
-    List<String> sessionIds =
-    sessionsSnap.docs.map((e) => e.id).toList();
+    List<QueryDocumentSnapshot> sessions = sessionsSnap.docs;
 
-    int totalSessions = sessionIds.length;
-
-    if (sessionIds.isEmpty) {
+    if (sessions.isEmpty) {
       setState(() {
         studentStats = [];
         loading = false;
@@ -342,31 +340,45 @@ class _StatsTabState extends State<StatsTab> {
       return;
     }
 
+    // 2️⃣ Get classId from first session
+    String classId = sessions.first['classId'];
+
+    // 3️⃣ Get ONLY students of this class
+    final classDoc = await FirebaseFirestore.instance
+        .collection('classes')
+        .doc(classId)
+        .get();
+
+    List<String> classStudents =
+    List<String>.from(classDoc.data()?['students'] ?? []);
+
+    int totalSessions = sessions.length;
+
+    // 4️⃣ Get attendance only for these sessions
     final attendanceSnap = await FirebaseFirestore.instance
         .collection('attendance')
         .where('sessionId',
-        whereIn: sessionIds.length > 10
-            ? sessionIds.sublist(0, 10)
-            : sessionIds)
+        whereIn: sessions.length > 10
+            ? sessions.map((e) => e.id).toList().sublist(0, 10)
+            : sessions.map((e) => e.id).toList())
         .get();
 
+    // 5️⃣ Count attendance
     Map<String, int> attendanceCount = {};
 
     for (var doc in attendanceSnap.docs) {
       String email = doc['studentEmail'];
+
+      // 🔥 IMPORTANT FILTER
+      if (!classStudents.contains(email)) continue;
+
       attendanceCount[email] = (attendanceCount[email] ?? 0) + 1;
     }
 
-    final studentsSnap = await FirebaseFirestore.instance
-        .collection('users')
-        .where('role', isEqualTo: 'student')
-        .get();
-
+    // 6️⃣ Build stats ONLY for class students
     List<Map<String, dynamic>> temp = [];
 
-    for (var student in studentsSnap.docs) {
-      String email = student['email'];
-
+    for (String email in classStudents) {
       int present = attendanceCount[email] ?? 0;
 
       double percentage =
@@ -378,13 +390,15 @@ class _StatsTabState extends State<StatsTab> {
       });
     }
 
-    temp.sort((a, b) => b['percentage'].compareTo(a['percentage']));
+    temp.sort((a, b) =>
+        (b['percentage'] as double).compareTo(a['percentage'] as double));
 
     setState(() {
       studentStats = temp;
       loading = false;
     });
   }
+
 
   @override
   Widget build(BuildContext context) {

@@ -6,6 +6,8 @@ import 'dart:async';
 import 'package:uuid/uuid.dart';
 import 'teacher_dashboard.dart';
 import '../widgets/logout_button.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:flutter/services.dart';
 
 class GenerateQRScreen extends StatefulWidget {
   final String subject;
@@ -25,26 +27,34 @@ class _GenerateQRScreenState extends State<GenerateQRScreen> {
   int secondsLeft = 30;
   Timer? timer;
 
-  void generateSession() async {
+  Future<String> generateSession({bool showOnPhone = true}) async {
     final String tempId = const Uuid().v4();
 
-    setState(() {
-      sessionId = tempId;
-      secondsLeft = 30;
-    });
+    // UI update
+    if (showOnPhone) {
+      setState(() {
+        sessionId = tempId;
+        secondsLeft = 15;
+      });
 
-    timer?.cancel();
+      timer?.cancel();
 
-    // ⏱ Countdown timer
-    timer = Timer.periodic(Duration(seconds: 1), (t) {
-      if (secondsLeft > 0) {
-        setState(() {
-          secondsLeft--;
-        });
-      } else {
-        t.cancel();
-      }
-    });
+      // ⏱ Timer only for phone display
+      timer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (secondsLeft > 1) {
+          setState(() {
+            secondsLeft--;
+          });
+        } else {
+          t.cancel();
+
+          setState(() {
+            secondsLeft = 0;
+            sessionId = null; // 🔥 hide QR after 15 sec
+          });
+        }
+      });
+    }
 
     try {
       await FirebaseFirestore.instance
@@ -54,27 +64,37 @@ class _GenerateQRScreenState extends State<GenerateQRScreen> {
         'subject': widget.subject,
         'classId': widget.classId,
         'teacherEmail': FirebaseAuth.instance.currentUser?.email,
-
         'startTime': DateTime.now(),
-
-        // 🔥 IMPORTANT FIX: consistency
-        'isActive': true,
-
-        'expiresAt': DateTime.now().add(Duration(seconds: 30)),
+        'isActive': false,
+        'started': false,
+        'expiresAt': null,
       });
 
-      // ⏱ Auto-expire session
-      Future.delayed(Duration(seconds: 30), () {
-        FirebaseFirestore.instance
-            .collection('sessions')
-            .doc(tempId)
-            .update({
-          'isActive': false,
-        });
-      });
+      // ⏱ Backend auto-expire
+
     } catch (e) {
       print("ERROR CREATING SESSION: $e");
     }
+
+    return tempId; // 🔥 important
+  }
+
+
+  void shareLink(String id) {
+    final link = "https://attendance-app-feefa.web.app/qr?sessionId=$id";
+
+    Share.share("Scan this QR for attendance:\n$link");
+  }
+  void copyLink() {
+    if (sessionId == null) return;
+
+    final link = "https://yourapp.com/session/$sessionId";
+
+    Clipboard.setData(ClipboardData(text: link));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Link copied to clipboard")),
+    );
   }
 
   @override
@@ -166,52 +186,76 @@ class _GenerateQRScreenState extends State<GenerateQRScreen> {
               const SizedBox(height: 48),
 
               // Main Action Button
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF6366F1).withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: ElevatedButton(
-                  onPressed: generateSession,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
+              Column(
+                children: [
+
+                  // 📱 SHOW QR
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                      ),
                       borderRadius: BorderRadius.circular(16),
                     ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
-                      Icon(Icons.qr_code_2_rounded, color: Colors.white, size: 22),
-                      SizedBox(width: 10),
-                      Text(
-                        "Generate QR Code",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
+                    child: ElevatedButton(
+                      onPressed: () => generateSession(showOnPhone: true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                    ],
+                      child: const Text(
+                        "Show QR",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+
+                  const SizedBox(height: 16),
+
+                  // 🔗 SHARE QR LINK
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        final id =
+                        await generateSession(showOnPhone: false);
+
+                        shareLink(id);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        "Share QR Link",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
 
               // Secondary Action Card
               SizedBox(
